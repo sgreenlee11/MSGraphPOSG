@@ -19,8 +19,7 @@ function Get-AADToken
 	}
 	ElseIf($ClientSecret)
 	{
-        #[uri]$authority = "https://login.microsoftonline.com/" + $TenantID
-        [uri]$authority = "https://login.microsoftonline.com/common/oauth2/authorize"
+        [uri]$authority = "https://login.microsoftonline.com/" + $TenantID
 
 	}
 	else
@@ -32,7 +31,6 @@ function Get-AADToken
 		
 		$clientcred = [Microsoft.Identity.Client.ClientCredential]::new($ClientSecret)
 		$clientapp = [Microsoft.Identity.Client.ConfidentialClientApplication]::new($clientid,$authority,$RedirectUri,$clientcred,$null,$null)
-		Write-Warning "Changing scope to https://graph.microsoft.com/.default for Client Credentials Flow. Will not work for other APIs"
 		if($Resource)
 		{
 			$scopes = $resource + "/.default"
