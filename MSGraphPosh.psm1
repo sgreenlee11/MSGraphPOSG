@@ -176,6 +176,7 @@ function Invoke-MAPasswordSpray {
         $offset = $offset + $UserGroupSize
     }
 
+    #Build Password Arrays
     $passwordgroups = [math]::Round([math]::Ceiling(($PasswordList.count / $PasswordGroupSize)), 0)
     $groupedpasswordlist = New-Object System.Collections.ArrayList
     $offset = 0
@@ -192,6 +193,7 @@ function Invoke-MAPasswordSpray {
     #Create array for collecting results
     $sprayresults = New-Object System.Collections.ArrayList
     $groupcount = 1
+    #Process Groups
     foreach ($usergroup in $groupeduserlist) {
         Write-Host "Processing User Group $($groupcount) of $($usergroups) Total Groups "
         foreach ($user in $usergroup) {    
